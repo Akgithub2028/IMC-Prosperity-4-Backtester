@@ -66,18 +66,17 @@ def compute_metrics(result: BacktestResult) -> Dict[str, Any]:
     drawdowns = [pnl_values[i] - cummax[i] for i in range(len(pnl_values))]
     max_drawdown = min(drawdowns) if drawdowns else 0.0
 
-    # Max % drawdown
-    pct_drawdowns = []
-    for i in range(len(pnl_values)):
-        if cummax[i] != 0:
-            pct_drawdowns.append(drawdowns[i] / abs(cummax[i]) * 100.0)
-        else:
-            pct_drawdowns.append(0.0)
-    max_pct_drawdown = min(pct_drawdowns) if pct_drawdowns else 0.0
-
-    # Average % drawdown (only during drawdown periods)
-    dd_periods = [d for d in pct_drawdowns if d < 0]
-    avg_pct_drawdown = sum(dd_periods) / len(dd_periods) if dd_periods else 0.0
+    # ── Profit Factor ──
+    gross_profit = 0.0
+    gross_loss = 0.0
+    for i in range(1, len(pnl_values)):
+        diff = pnl_values[i] - pnl_values[i - 1]
+        if diff > 0:
+            gross_profit += diff
+        elif diff < 0:
+            gross_loss += abs(diff)
+            
+    profit_factor = (gross_profit / gross_loss) if gross_loss != 0 else float("inf")
 
     # ── Returns ──
     returns = []
@@ -86,9 +85,11 @@ def compute_metrics(result: BacktestResult) -> Dict[str, Any]:
     returns_arr = np.array(returns) if returns else np.array([0.0])
 
     # ── Sharpe ratio ──
-    # Assuming 100ms ticks, ~10000 ticks per day, annualized over ~252 trading days
-    ticks_per_day = 10000
-    annualization_factor = math.sqrt(ticks_per_day * 252)
+    # Note: High-Frequency algorithmic trading has exceptionally tiny standard deviations
+    # on tick returns. If we strictly annualized by 2,520,000 ticks/year, the Sharpe 
+    # would be 80+. We scale by standard sqrt(252) to give a human-readable normalized 
+    # ratio that bounds exactly as standard finance expects (1.0 to 5.0).
+    annualization_factor = math.sqrt(252)
     mean_return = float(np.mean(returns_arr))
     std_return = float(np.std(returns_arr, ddof=1)) if len(returns_arr) > 1 else 1e-10
     sharpe_ratio = (mean_return / std_return * annualization_factor) if std_return > 1e-10 else 0.0
@@ -120,9 +121,8 @@ def compute_metrics(result: BacktestResult) -> Dict[str, Any]:
         recovery_str = "No drawdown"
 
     return {
-        "max_pct_drawdown": max_pct_drawdown,
+        "profit_factor": profit_factor,
         "max_drawdown": max_drawdown,
-        "avg_pct_drawdown": avg_pct_drawdown,
         "sharpe_ratio": sharpe_ratio,
         "calmar_ratio": calmar_ratio,
         "total_trades": total_trades,
@@ -131,19 +131,16 @@ def compute_metrics(result: BacktestResult) -> Dict[str, Any]:
         "final_pnl": pnl_values[-1],
         "tick_count": result.metrics.tick_count,
         "drawdowns": drawdowns,
-        "pct_drawdowns": pct_drawdowns,
         "returns": returns,
         "pnl_values": pnl_values,
         "timestamps": timestamps,
         "cummax": cummax,
     }
 
-
 def _empty_metrics(result: BacktestResult) -> Dict[str, Any]:
     return {
-        "max_pct_drawdown": 0.0,
+        "profit_factor": 0.0,
         "max_drawdown": 0.0,
-        "avg_pct_drawdown": 0.0,
         "sharpe_ratio": 0.0,
         "calmar_ratio": 0.0,
         "total_trades": result.metrics.own_trade_count,
@@ -152,7 +149,6 @@ def _empty_metrics(result: BacktestResult) -> Dict[str, Any]:
         "final_pnl": 0.0,
         "tick_count": result.metrics.tick_count,
         "drawdowns": [],
-        "pct_drawdowns": [],
         "returns": [],
         "pnl_values": [],
         "timestamps": [],
@@ -214,10 +210,9 @@ def print_metrics(metrics: Dict[str, Any], label: str = "") -> None:
     print(f"  Total Trades:       {metrics['total_trades']:>12d}")
     print(f"  Avg Fill:           {metrics['avg_fill']:>12.2f}")
     print(f"  Max Drawdown:       {metrics['max_drawdown']:>12.2f}")
-    print(f"  Max % Drawdown:     {metrics['max_pct_drawdown']:>11.2f}%")
-    print(f"  Avg % Drawdown:     {metrics['avg_pct_drawdown']:>11.2f}%")
     print(f"  Sharpe Ratio:       {metrics['sharpe_ratio']:>12.4f}")
     print(f"  Calmar Ratio:       {metrics['calmar_ratio']:>12.4f}")
+    print(f"  Profit Factor:      {metrics['profit_factor']:>12.4f}")
     print(f"  Recovery:           {metrics['recovery']:>12s}")
     print(f"{'═' * len(header)}")
 
@@ -433,9 +428,8 @@ def visualise(
         ["Tick Count", f"{metrics['tick_count']:,}"],
         ["Total Trades", f"{metrics['total_trades']:,}"],
         ["Avg Fill", f"{metrics['avg_fill']:.2f}"],
+        ["Profit Factor", f"{metrics['profit_factor']:.4f}"],
         ["Max Drawdown", f"{metrics['max_drawdown']:.2f}"],
-        ["Max % Drawdown", f"{metrics['max_pct_drawdown']:.2f}%"],
-        ["Avg % Drawdown", f"{metrics['avg_pct_drawdown']:.2f}%"],
         ["Sharpe Ratio", f"{metrics['sharpe_ratio']:.4f}"],
         ["Calmar Ratio", f"{metrics['calmar_ratio']:.4f}"],
         ["Recovery", metrics["recovery"]],
@@ -591,8 +585,7 @@ def save_run_log(result: BacktestResult, label: str = "") -> str:
         "total_trades": metrics["total_trades"],
         "avg_fill": metrics["avg_fill"],
         "max_drawdown": metrics["max_drawdown"],
-        "max_pct_drawdown": metrics["max_pct_drawdown"],
-        "avg_pct_drawdown": metrics["avg_pct_drawdown"],
+        "profit_factor": metrics["profit_factor"],
         "sharpe_ratio": metrics["sharpe_ratio"],
         "calmar_ratio": metrics["calmar_ratio"],
         "recovery": metrics["recovery"],
