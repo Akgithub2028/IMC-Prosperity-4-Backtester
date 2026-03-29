@@ -13,6 +13,7 @@ Designed for both terminal and Google Colab (inline matplotlib).
 
 from __future__ import annotations
 
+import json
 import math
 import os
 from collections import OrderedDict
@@ -20,37 +21,8 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-# ─── Environment Detection ───────────────────────────────────────────────────
-
-def _is_colab() -> bool:
-    """Detect if running inside Google Colab."""
-    try:
-        import google.colab  # noqa: F401
-        return True
-    except ImportError:
-        return False
-
-
-def _is_interactive() -> bool:
-    """Detect if running in an interactive Python session (Jupyter/IPython/REPL)."""
-    try:
-        from IPython import get_ipython
-        shell = get_ipython()
-        if shell is None:
-            return False
-        return shell.__class__.__name__ in ("ZMQInteractiveShell", "TerminalInteractiveShell")
-    except ImportError:
-        return False
-
-
-IN_COLAB = _is_colab()
-IN_INTERACTIVE = _is_interactive()
-
 try:
     import matplotlib
-    # Use Agg backend when running as script (not interactive) to avoid display issues
-    if not IN_INTERACTIVE:
-        matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import matplotlib.ticker as ticker
     from matplotlib.gridspec import GridSpec
@@ -62,16 +34,13 @@ except ImportError:
 from backtester import BacktestResult, SHORT_PRODUCT_LABELS
 
 
-def _display_saved_image(path: str) -> None:
-    """Display a saved image inline in Colab/Jupyter, or print path for terminal."""
-    if IN_COLAB or IN_INTERACTIVE:
-        try:
-            from IPython.display import Image, display
-            display(Image(filename=path))
-            return
-        except ImportError:
-            pass
-    print(f"  [SAVED] Chart → {path}")
+def _save_and_show(fig, save_path: str, label: str = "") -> None:
+    """Save chart to file, then show inline (if interactive) or print path."""
+    os.makedirs(os.path.dirname(save_path) or ".", exist_ok=True)
+    fig.savefig(save_path, dpi=150, bbox_inches="tight", facecolor="#0d1117")
+    print(f"  [SAVED] {save_path}")
+    plt.show()  # Shows inline in Colab/Jupyter (%matplotlib inline), no-op in Agg
+    plt.close(fig)
 
 
 
@@ -495,15 +464,13 @@ def visualise(
 
     ax5.set_title("Performance Metrics", fontsize=13, color="#c9d1d9", pad=10)
 
-    # Always save to file for Colab/non-interactive compatibility
+    # Always save to file
     if not save_path:
         os.makedirs("runs", exist_ok=True)
         safe_label = label.replace(" ", "_").replace("/", "-") if label else "backtest"
         save_path = os.path.join("runs", f"chart_{safe_label}.png")
 
-    fig.savefig(save_path, dpi=150, bbox_inches="tight", facecolor="#0d1117")
-    plt.close(fig)
-    _display_saved_image(save_path)
+    _save_and_show(fig, save_path, label)
 
 
 def visualise_product_comparison(
@@ -569,14 +536,12 @@ def visualise_product_comparison(
 
     plt.tight_layout()
 
-    # Always save to file for Colab/non-interactive compatibility
+    # Always save to file
     if not save_path:
         os.makedirs("runs", exist_ok=True)
         save_path = os.path.join("runs", "chart_product_comparison.png")
 
-    fig.savefig(save_path, dpi=150, bbox_inches="tight", facecolor="#0d1117")
-    plt.close(fig)
-    _display_saved_image(save_path)
+    _save_and_show(fig, save_path, "comparison")
 
 
 # ─── All-in-one Analysis ─────────────────────────────────────────────────────
@@ -605,3 +570,53 @@ def full_analysis(
     visualise(result, label=label, save_path=save_path, show=show)
 
     return metrics
+
+
+# ─── Log Saving ──────────────────────────────────────────────────────────────
+
+
+def save_run_log(result: BacktestResult, label: str = "") -> str:
+    """Save full backtest log (metrics + PnL series + trades) to a JSON file."""
+    os.makedirs("runs", exist_ok=True)
+    safe_label = label.replace(" ", "_").replace("/", "-") if label else "backtest"
+    log_path = os.path.join("runs", f"log_{safe_label}.json")
+
+    metrics = compute_metrics(result)
+    product_metrics = compute_product_metrics(result)
+
+    log_data = {
+        "label": label,
+        "final_pnl": metrics["final_pnl"],
+        "tick_count": metrics["tick_count"],
+        "total_trades": metrics["total_trades"],
+        "avg_fill": metrics["avg_fill"],
+        "max_drawdown": metrics["max_drawdown"],
+        "max_pct_drawdown": metrics["max_pct_drawdown"],
+        "avg_pct_drawdown": metrics["avg_pct_drawdown"],
+        "sharpe_ratio": metrics["sharpe_ratio"],
+        "calmar_ratio": metrics["calmar_ratio"],
+        "recovery": metrics["recovery"],
+        "pnl_by_product": {
+            k: v for k, v in result.metrics.final_pnl_by_product.items()
+        },
+        "product_metrics": product_metrics,
+        "pnl_series": result.pnl_series,
+        "position_series": result.position_series,
+        "own_trades": [
+            {
+                "symbol": t.symbol,
+                "price": t.price,
+                "quantity": t.quantity,
+                "buyer": t.buyer,
+                "seller": t.seller,
+                "timestamp": t.timestamp,
+            }
+            for t in result.own_trades_all
+        ],
+    }
+
+    with open(log_path, "w") as f:
+        json.dump(log_data, f, indent=2)
+
+    print(f"  [LOG] {log_path}")
+    return log_path

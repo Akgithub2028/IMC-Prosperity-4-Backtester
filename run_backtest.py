@@ -38,6 +38,7 @@ from visualiser import (
     print_product_table,
     visualise,
     visualise_product_comparison,
+    save_run_log,
 )
 
 
@@ -111,9 +112,10 @@ def main():
     # Print summary
     print_summary(labeled, trader_path)
 
-    # Visualise each result
+    # Save logs and Visualise each result
     if not args.no_visualise:
         for label, result in results.items():
+            save_run_log(result, label=label)
             full_analysis(
                 result,
                 label=label,
